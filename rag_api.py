@@ -41,6 +41,7 @@ class CodeRetrievalAgent(TypedDict):
     chunks: list
     user_question: str
     result: str
+    sources: list
 
 #Request modal
 class QuestionRequest(BaseModel):
@@ -49,8 +50,9 @@ class QuestionRequest(BaseModel):
 #function to retrieve the info. and build the prompt for the llm 
 def retrieve_chunk(state: CodeRetrievalAgent):
     question = state['user_question']
-    response = collection.query(query_texts=[question], n_results=5)
+    response = collection.query(query_texts=[question], n_results=3)
     prompt = []
+    sources = []
     documents = response['documents'][0]
     metadatas = response['metadatas'][0]
     distances = response['distances'][0]
@@ -61,7 +63,9 @@ def retrieve_chunk(state: CodeRetrievalAgent):
         file_path = metadatas[i]['file_path']
         content = documents[i][:800]
         prompt.append(f"file_path: {file_path}, content: {content}")
-    return {"chunks": prompt}
+        sources.append(file_path)
+    unique_sources = list(set(sources))
+    return {"chunks": prompt, "sources": unique_sources}
 
 #function to generate the final answer
 def generate_answer(state: CodeRetrievalAgent):
@@ -76,7 +80,7 @@ def generate_answer(state: CodeRetrievalAgent):
     prompt = f"{message}\n\nQuestion: {question}\n\nRelevant Code:\n{chunks_text}"
     response = llm.invoke(prompt)
     cleaner_response = re.sub(r'<think>.*?</think>', '', response.content, flags=re.DOTALL).strip()
-    return {"result": cleaner_response}
+    return {"result": cleaner_response, "sources": state["sources"]}
 
 #building the graph
 graph = StateGraph(CodeRetrievalAgent)
@@ -100,5 +104,5 @@ agent = graph.compile()
 #api route: when users ask a question
 @app.post('/ask')
 def ask_question(state: QuestionRequest):
-    result = agent.invoke({"chunks":[], "user_question": state.question, "result":''})
-    return {"answer":result["result"]}
+    result = agent.invoke({"chunks":[], "user_question": state.question, "result":'', "sources": []})
+    return {"answer":result["result"], "sources": result["sources"]}

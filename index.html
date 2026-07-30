@@ -117,6 +117,33 @@
         padding: 0;
         color: #a8d8ff;
     }
+    .sources {
+    margin-bottom: 20px;
+    padding: 16px 20px;
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    }
+
+    .sources strong {
+        color: #4f8ef7;
+        display: block;
+        margin-bottom: 8px;
+    }
+
+    .sources ul {
+        padding-left: 20px;
+        margin: 0;
+    }
+
+    .sources li {
+        color: #999;
+        font-family: monospace;
+        margin-bottom: 4px;
+        word-break: break-all;
+    }
+
 </style>
 </head>
 <body>
@@ -127,6 +154,7 @@
             <button onclick="answerQuestion()" id="answerBtn">Answer</button>
         </div>
         <div class="status"></div>
+        <div class="sources"></div>
         <div class="answer_body"></div>
     </div>
 
@@ -144,6 +172,7 @@
             const status = document.querySelector('.status')
             const answerBody = document.querySelector('.answer_body')
             const btn = document.getElementById('answerBtn')
+            sourcesBody = document.querySelector('.sources')
 
             btn.disabled = true
             btn.textContent = 'Thinking...'
@@ -158,6 +187,12 @@
                 })
                 const data = await response.json()
                 answerBody.innerHTML = marked.parse(data.answer)
+                let sourcesHtml = '<strong>Sources:</strong><ul>'
+                data.sources.forEach(source => {
+                    sourcesHtml += `<li>${source}</li>`
+                })
+                sourcesHtml += '</ul>'
+                sourcesBody.innerHTML = sourcesHtml
                 status.innerText = ""
             }catch(err){
                 status.innerText = `⚠️ Oops! Could not generate an answer. Is the server running?`
