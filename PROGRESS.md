@@ -51,7 +51,7 @@ Building a Retrieval-Augmented Generation (RAG) system to answer questions about
 
 ---
 
-## 🔲 Phase 5 — Connect Retrieval to LLM (In Progress)
+## 🔲 Phase 5 — Connect Retrieval to LLM (Complete)
 
 - [ ] Build a function that takes a question, retrieves top chunks, and builds a prompt
 - [ ] Send prompt + retrieved code to Groq LLM
