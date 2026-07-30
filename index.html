@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ABHI Rag Agent</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+        font-family: 'Segoe UI', sans-serif;
+        background: #0f0f0f;
+        color: #e0e0e0;
+        min-height: 100vh;
+        padding: 40px 20px;
+    }
+
+    .container {
+        max-width: 800px;
+        margin: 0 auto;
+    }
+
+    h2 {
+        text-align: center;
+        font-size: 2rem;
+        margin-bottom: 30px;
+        color: #ffffff;
+    }
+
+    .search-box {
+        display: flex;
+        gap: 12px;
+        margin-bottom: 24px;
+    }
+
+    input {
+        flex: 1;
+        padding: 14px 18px;
+        border-radius: 8px;
+        border: 1px solid #333;
+        background: #1a1a1a;
+        color: #fff;
+        font-size: 1rem;
+        outline: none;
+    }
+
+    input:focus {
+        border-color: #4f8ef7;
+    }
+
+    button {
+        padding: 14px 28px;
+        background: #4f8ef7;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-size: 1rem;
+        cursor: pointer;
+    }
+
+    button:hover { background: #3a7ae0; }
+    button:disabled { background: #333; cursor: not-allowed; }
+
+    .status {
+        text-align: center;
+        color: #888;
+        margin-bottom: 20px;
+        font-size: 0.9rem;
+        min-height: 20px;
+    }
+
+    .answer_body {
+        background: #1a1a1a;
+        border: 1px solid #333;
+        border-radius: 12px;
+        padding: 28px;
+        line-height: 1.7;
+    }
+
+    .answer_body h1, .answer_body h2, .answer_body h3 {
+        color: #ffffff;
+        margin: 16px 0 8px;
+    }
+
+    .answer_body p { margin-bottom: 12px; color: #ccc; }
+
+    .answer_body ul, .answer_body ol {
+        padding-left: 22px;
+        margin-bottom: 12px;
+        color: #ccc;
+    }
+
+    .answer_body li { margin-bottom: 6px; }
+
+    .answer_body strong { color: #fff; }
+
+    .answer_body code {
+        background: #252525;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 0.9rem;
+        color: #4f8ef7;
+    }
+
+    .answer_body pre {
+        background: #0d0d0d;
+        padding: 16px;
+        border-radius: 8px;
+        overflow-x: auto;
+        margin: 12px 0;
+        border: 1px solid #2a2a2a;
+    }
+
+    .answer_body pre code {
+        background: none;
+        padding: 0;
+        color: #a8d8ff;
+    }
+</style>
+</head>
+<body>
+    <div class="container">
+        <h2>ABHI Rag Agent</h2>
+        <div class="search-box">
+            <input name="ask_question" id="ask_question" placeholder="Type your question..." />
+            <button onclick="answerQuestion()" id="answerBtn">Answer</button>
+        </div>
+        <div class="status"></div>
+        <div class="answer_body"></div>
+    </div>
+
+    <script>
+        document.getElementById('ask_question').addEventListener('keypress', function(e){
+            if(e.key === 'Enter'){
+                answerQuestion()
+            }
+        })
+
+        async function answerQuestion(){
+            const question = document.getElementById("ask_question").value
+            if (!question.trim()) return
+
+            const status = document.querySelector('.status')
+            const answerBody = document.querySelector('.answer_body')
+            const btn = document.getElementById('answerBtn')
+
+            btn.disabled = true
+            btn.textContent = 'Thinking...'
+            status.innerText = "Hang on, I am generating your answer"
+            answerBody.innerHTML = ""
+
+            try{
+                const response = await fetch('http://127.0.0.1:8003/ask', {
+                    method: 'POST',
+                    headers: {'content-type':'application/json'},
+                    body: JSON.stringify({question: question})
+                })
+                const data = await response.json()
+                answerBody.innerHTML = marked.parse(data.answer)
+                status.innerText = ""
+            }catch(err){
+                status.innerText = `⚠️ Oops! Could not generate an answer. Is the server running?`
+            }
+
+            btn.disabled = false
+            btn.textContent = 'Answer'
+        }
+    </script>
+</body>
+</html>
