@@ -60,14 +60,27 @@ Building a Retrieval-Augmented Generation (RAG) system to answer questions about
 
 ---
 
-## 🔲 Phase 6 — API + Web UI (Not Started)
+## 🔲 Phase 6 — API + Web UI (Complete)
 
 - [ ] FastAPI backend exposing the RAG agent
 - [ ] Simple web UI to ask questions and see answers with source file references
 
 ---
 
-## 🔲 Phase 7 — Scale Up (Not Started)
+## ✅ Phase 7 — Tree-sitter Based Chunking (Complete)
 
-- [ ] Expand indexing to more folders (migrations, frontend)
-- [ ] Add re-indexing capability (detect changed files, update only those)
+- Replaced regex-based chunking with proper AST parsing using `tree-sitter` + `tree-sitter-javascript`
+- Built `extract_chunk_treesitter()` — walks the syntax tree, correctly distinguishes real logic (functions) from simple data (imports, arrays, constants), merges consecutive simple declarations, attaches comments precisely
+- Fixed edge cases discovered during testing:
+  - Multi-declarator lines (e.g. `const x = ..., y = ...`) — now correctly flips to "complex" if ANY declarator is a function
+  - Boolean literal values (`true`/`false`) — added to the simple-data whitelist
+- Re-indexed routes + logic folders into a new collection (`chroma_db_v2`) → 1815 chunks (vs 1151 with regex) — more precise, granular boundaries
+- Increased `n_results` from 3 to 5 in the RAG agent — fixed cases where the correct answer ranked just outside top-3 among semantically similar files (e.g. diet plan generation question)
+- Verified accuracy on real questions: staffuser deletion, appointment booking, diet plan generation — all returning detailed, correctly-cited, accurate answers
+
+**Files:** `index_codebase.py` (rewritten with tree-sitter), `test_treesitter.py` (prototyping/validation)
+
+### Key learnings
+- Tree-sitter parses actual JavaScript grammar (AST) rather than guessing with regex — far more robust across different code styles
+- Clarified token limit mechanics: `max_tokens` controls LLM output only; Groq's account-level TPM rate limit covers input+output combined — this is why chunk truncation (`[:800]`) was necessary
+- Confirmed embedding model weights load once per process (at server/script startup), not per-request — efficient by design
