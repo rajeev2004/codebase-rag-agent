@@ -30,9 +30,9 @@ embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
 llm = ChatGroq(model="qwen/qwen3.6-27b", max_tokens=4096)
 
 #connecting to DB
-client = chromadb.PersistentClient('./chroma_db')
+client = chromadb.PersistentClient('./chroma_db_v2')
 collection = client.get_collection(
-    name = 'abhi-chord-code',
+    name = 'ABHI-CHORD',
     embedding_function = embedding_function
 )
 
@@ -50,7 +50,7 @@ class QuestionRequest(BaseModel):
 #function to retrieve the info. and build the prompt for the llm 
 def retrieve_chunk(state: CodeRetrievalAgent):
     question = state['user_question']
-    response = collection.query(query_texts=[question], n_results=3)
+    response = collection.query(query_texts=[question], n_results=5)
     prompt = []
     sources = []
     documents = response['documents'][0]
