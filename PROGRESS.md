@@ -84,3 +84,24 @@ Building a Retrieval-Augmented Generation (RAG) system to answer questions about
 - Tree-sitter parses actual JavaScript grammar (AST) rather than guessing with regex — far more robust across different code styles
 - Clarified token limit mechanics: `max_tokens` controls LLM output only; Groq's account-level TPM rate limit covers input+output combined — this is why chunk truncation (`[:800]`) was necessary
 - Confirmed embedding model weights load once per process (at server/script startup), not per-request — efficient by design
+
+---
+
+## ✅ Phase 8 — Expanded Backend Coverage (Complete)
+
+- Expanded `TARGET_FOLDERS` to include: `common`, `middleware`, `partners`, `cron`, `migrations` (in addition to `routes` and `logic`)
+- Re-indexed into a new collection (`ABHI-CHORD-Full-Backend` in `chroma_db_v2`) → 2283 total chunks (up from 1815)
+- Confirmed migrations folder correctly indexed and retrievable (e.g. `create_patients_table_creation.js` found via debug queries)
+
+### ⚠️ Known Limitation — Phrasing sensitivity in semantic search
+
+Discovered that the SAME underlying question, phrased differently, can retrieve significantly different (and sometimes worse) results:
+- Short/keyword query: `"patients table columns schema"` → correctly ranked the actual table-creation migration file at position 3
+- Longer/conversational query: `"what are all the columns in the patients table schema"` → the SAME file dropped out of top-10 entirely
+
+This is an inherent characteristic of embedding-based semantic search — longer, natural-language phrasing can dilute the question's embedding, shifting which chunks rank closest. Not a bug in the chunking or retrieval logic itself, but a genuine limitation of the current approach.
+
+**Future improvement — Query Rewriting/Transformation:**
+Before searching ChromaDB, use the LLM to rewrite the user's natural-language question into a shorter, more keyword-focused search query first, then use THAT rewritten query for retrieval. This is a well-known RAG technique ("query transformation") that would make retrieval more robust to phrasing variation, at the cost of an extra LLM call (slightly slower, more tokens per request). Planned as a future enhancement.
+
+**Files:** `index_codebase.py` (updated TARGET_FOLDERS + collection name)

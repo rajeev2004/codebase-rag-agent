@@ -32,7 +32,7 @@ llm = ChatGroq(model="qwen/qwen3.6-27b", max_tokens=4096)
 #connecting to DB
 client = chromadb.PersistentClient('./chroma_db_v2')
 collection = client.get_collection(
-    name = 'ABHI-CHORD',
+    name = 'ABHI-CHORD-Full-Backend',
     embedding_function = embedding_function
 )
 

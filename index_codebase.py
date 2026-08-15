@@ -15,7 +15,7 @@ embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
 )
 client = chromadb.PersistentClient(path='./chroma_db_v2')
 collection = client.create_collection(
-    name="ABHI-CHORD",
+    name="ABHI-CHORD-Full-Backend",
     embedding_function=embedding_function
 )
 
@@ -81,7 +81,12 @@ def extract_chunk_treesitter(content):
 #embedding only these folder
 TARGET_FOLDERS = [
     "/home/rajeev/circlehealthNew/abhi-chord/packages/backend/src/routes",
-    "/home/rajeev/circlehealthNew/abhi-chord/packages/backend/src/logic"
+    "/home/rajeev/circlehealthNew/abhi-chord/packages/backend/src/logic",
+    "/home/rajeev/circlehealthNew/abhi-chord/packages/backend/src/common",
+    "/home/rajeev/circlehealthNew/abhi-chord/packages/backend/src/middleware",
+    "/home/rajeev/circlehealthNew/abhi-chord/packages/backend/src/partners",
+    "/home/rajeev/circlehealthNew/abhi-chord/packages/backend/src/cron",
+    "/home/rajeev/circlehealthNew/abhi-chord/packages/backend/migrations"
 ]
 
 #storing all the chunks here
