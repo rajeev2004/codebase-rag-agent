@@ -159,6 +159,7 @@
     </div>
 
     <script>
+        const session_id = `session-${Date.now()}`
         document.getElementById('ask_question').addEventListener('keypress', function(e){
             if(e.key === 'Enter'){
                 answerQuestion()
@@ -183,7 +184,7 @@
                 const response = await fetch('http://127.0.0.1:8003/ask', {
                     method: 'POST',
                     headers: {'content-type':'application/json'},
-                    body: JSON.stringify({question: question})
+                    body: JSON.stringify({question: question, session_id: session_id})
                 })
                 const data = await response.json()
                 answerBody.innerHTML = marked.parse(data.answer)

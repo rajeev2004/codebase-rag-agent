@@ -105,3 +105,23 @@ This is an inherent characteristic of embedding-based semantic search — longer
 Before searching ChromaDB, use the LLM to rewrite the user's natural-language question into a shorter, more keyword-focused search query first, then use THAT rewritten query for retrieval. This is a well-known RAG technique ("query transformation") that would make retrieval more robust to phrasing variation, at the cost of an extra LLM call (slightly slower, more tokens per request). Planned as a future enhancement.
 
 **Files:** `index_codebase.py` (updated TARGET_FOLDERS + collection name)
+
+---
+
+## ✅ Phase 9 — Conversational Memory with Query Rewriting (Complete)
+
+- Added `conversation_history` SQLite table (`session_id`, `question`, `answer`, `timestamp`) to persist conversation context
+- Added `session_id` to frontend (generated per page load via `Date.now()`) and backend request model
+- Built query rewriting step inside `retrieve_chunk` — uses conversation history + new question to produce a standalone, keyword-focused search query BEFORE retrieval. This resolves the Phase 8 "phrasing sensitivity" limitation AND solves the "dangling reference" problem for follow-up questions (e.g. "what about staffusers?")
+- Updated `generate_answer` to include formatted conversation history in its final prompt, so answers stay contextually coherent across turns
+- History is fetched in the API route (outside the LangGraph, before invoking) and passed into agent state as part of the initial invoke; new Q&A pairs are saved back to SQLite after each response
+- Tested successfully: 
+  - Q1: "how does soft delete work for activities?" → correctly identified as a hard delete
+  - Q2: "what about staffusers?" → correctly understood the dangling reference, rewrote it into a standalone query, retrieved `staffuser.js`, and gave a coherent answer consistent with Q1's reasoning
+
+**Files:** `rag_api.py` (added memory/rewriting logic), `index.html` (added `session_id` to requests)
+
+### Key learnings
+- Query rewriting solves two problems at once: resolving conversational references AND normalizing phrasing for more consistent retrieval
+- Kept SQLite reads/writes OUTSIDE the LangGraph (in the API route), consistent with how history is saved — cleaner separation than adding a dedicated "fetch_history" node
+- `session_id` (identifies an ongoing conversation) is a fundamentally different concept from `thread_id`-style caching (matching on identical repeatable inputs) — free-form questions can't be reliably deduplicated the same way structured quiz inputs can
