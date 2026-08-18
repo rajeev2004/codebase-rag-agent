@@ -12,9 +12,14 @@ import re
 from typing import TypedDict, Annotated, Literal
 from dotenv import load_dotenv
 import os
+import logging
 
 #load env file
 load_dotenv()
+
+#setting logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 #instance of the fastapi
 app = FastAPI()
@@ -93,8 +98,10 @@ def retrieve_chunk(state: CodeRetrievalAgent):
     documents = response['documents'][0]
     metadatas = response['metadatas'][0]
     distances = response['distances'][0]
-    print(f"Best match distance: {distances[0]}") 
+    logger.info(f"Best match distance: {distances[0]}")
+    # print(f"Best match distance: {distances[0]}") 
     if distances[0] > 0.9:      # No relevant data found
+        logger.warning("No relevant chunk found for this question")
         return {"chunks":[]}
     for i in range(len(documents)):
         file_path = metadatas[i]['file_path']
@@ -123,6 +130,8 @@ def generate_answer(state: CodeRetrievalAgent):
     prompt = f"{message}\n\nQuestion: {question}\n\nRelevant Code:\n{chunks_text}\n\nHistory:\n{history_text}"
     response = llm.invoke(prompt)
     cleaner_response = re.sub(r'<think>.*?</think>', '', response.content, flags=re.DOTALL).strip()
+    if "I couldn't find relevant code for this question." in cleaner_response:
+        logger.warning("LLM could not find relevant code from the retrieved chunks")
     return {"result": cleaner_response, "sources": state["sources"]}
 
 #building the graph
@@ -147,6 +156,7 @@ agent = graph.compile()
 #api route: when users ask a question
 @app.post('/ask')
 def ask_question(state: QuestionRequest):
+    logger.info(f"Question asked: {state.question}")
     session_id = state.session_id
     #fetching history
     cursor = conn.cursor()
@@ -158,4 +168,5 @@ def ask_question(state: QuestionRequest):
     #saving this question and answer in history
     cursor.execute("INSERT into conversation_history VALUES (?,?,?,?)",(session_id, state.question, result['result'], datetime.datetime.now()))
     conn.commit()
+    logger.info(f"Answer: {result['result']}")
     return {"answer":result["result"], "sources": result["sources"]}
