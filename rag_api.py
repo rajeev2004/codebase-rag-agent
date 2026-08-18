@@ -74,25 +74,34 @@ class QuestionRequest(BaseModel):
 def retrieve_chunk(state: CodeRetrievalAgent):
     question = state['user_question']
     history = state['history']
+    # updated_cleaner_question = ''  Not necessary as python does not create blocks for if, else, try, except, for, while
     #Formatting the questions and the asnwers
     history_text = "\n".join([f"Q: {q}\nA: {a}" for q, a in history])
-    updated_question = llm.invoke(f"""You are a query optimization assistant for a code search system that uses semantic vector search.
+    try:
+        updated_question = llm.invoke(f"""You are a query optimization assistant for a code search system that uses semantic vector search.
 
-                Given the conversation history and a new question, produce the BEST possible search query for finding relevant code.
+                    Given the conversation history and a new question, produce the BEST possible search query for finding relevant code.
 
-                Rules:
-                1. If the new question references something from history (like "what about X", "and that"), incorporate the missing context explicitly.
-                2. Convert the result into a SHORT, keyword-focused search query (not a full sentence) — remove filler words like "how does", "work", "explain".
-                3. Focus on the CORE technical concepts and terms.
-                4. Return ONLY the search query. No explanations, no extra text, no quotes.
+                    Rules:
+                    1. If the new question references something from history (like "what about X", "and that"), incorporate the missing context explicitly.
+                    2. Convert the result into a SHORT, keyword-focused search query (not a full sentence) — remove filler words like "how does", "work", "explain".
+                    3. Focus on the CORE technical concepts and terms.
+                    4. Return ONLY the search query. No explanations, no extra text, no quotes.
 
-                Conversation history:
-                {history_text}
+                    Conversation history:
+                    {history_text}
 
-                New question: {question}"""
-            )
-    updated_cleaner_question = re.sub(r'<think>.*?</think>', '', updated_question.content, flags=re.DOTALL).strip().lower()
-    response = collection.query(query_texts=[updated_cleaner_question], n_results=5)
+                    New question: {question}"""
+                )
+        updated_cleaner_question = re.sub(r'<think>.*?</think>', '', updated_question.content, flags=re.DOTALL).strip().lower()
+    except Exception as e:
+        logger.error(f"Query rewriting fails, using user typed question: {e}")
+        updated_cleaner_question = question
+    try:
+        response = collection.query(query_texts=[updated_cleaner_question], n_results=5)
+    except Exception as e:
+        logger.error("Error while fetching data from DB")
+        return {"chunks":[]}
     prompt = []
     sources = []
     documents = response['documents'][0]
@@ -128,7 +137,11 @@ def generate_answer(state: CodeRetrievalAgent):
                 Otherwise, answer based on the code provided and cite the filepath."""
     chunks_text = "\n\n".join(state['chunks'])
     prompt = f"{message}\n\nQuestion: {question}\n\nRelevant Code:\n{chunks_text}\n\nHistory:\n{history_text}"
-    response = llm.invoke(prompt)
+    try:
+        response = llm.invoke(prompt)
+    except Exception as e:
+        logger.error(f"LLM did not produced the result")
+        return {"result":"I am having trouble generating the response right now.", "sources":[]}
     cleaner_response = re.sub(r'<think>.*?</think>', '', response.content, flags=re.DOTALL).strip()
     if "I couldn't find relevant code for this question." in cleaner_response:
         logger.warning("LLM could not find relevant code from the retrieved chunks")
@@ -160,13 +173,26 @@ def ask_question(state: QuestionRequest):
     session_id = state.session_id
     #fetching history
     cursor = conn.cursor()
-    cursor.execute("SELECT question, answer from conversation_history where session_id=? ORDER BY timestamp DESC LIMIT 3",(session_id,))       # comma added as sqlite's execute command excepts a tuple, and without the comma it is treated as a string
-    history = cursor.fetchall()
-    conn.commit()
-    result = agent.invoke({"chunks":[], "user_question": state.question, "result":'', "sources": [], "history": history})
+    try:
+        cursor.execute("SELECT question, answer from conversation_history where session_id=? ORDER BY timestamp DESC LIMIT 3",(session_id,))       # comma added as sqlite's execute command excepts a tuple, and without the comma it is treated as a string
+        history = cursor.fetchall()
+        conn.commit()
+    except Exception as e:
+        history = []
+        logger.error(f"Cannot fetch the History from the DB, sending history as empty: {e}")
 
-    #saving this question and answer in history
-    cursor.execute("INSERT into conversation_history VALUES (?,?,?,?)",(session_id, state.question, result['result'], datetime.datetime.now()))
-    conn.commit()
+    try:
+        result = agent.invoke({"chunks":[], "user_question": state.question, "result":'', "sources": [], "history": history})
+    except Exception as e:
+        logger.error(f"Agent invocation failed: {e}")
+        return {"answer":"Something went wrong while processing your question. Please try again.", "sources": []}
+    
+    try:
+        #saving this question and answer in history
+        cursor.execute("INSERT into conversation_history VALUES (?,?,?,?)",(session_id, state.question, result['result'], datetime.datetime.now()))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"Error while saving the history in the DB: {e}")
+
     logger.info(f"Answer: {result['result']}")
     return {"answer":result["result"], "sources": result["sources"]}

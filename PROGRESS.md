@@ -125,3 +125,34 @@ Before searching ChromaDB, use the LLM to rewrite the user's natural-language qu
 - Query rewriting solves two problems at once: resolving conversational references AND normalizing phrasing for more consistent retrieval
 - Kept SQLite reads/writes OUTSIDE the LangGraph (in the API route), consistent with how history is saved — cleaner separation than adding a dedicated "fetch_history" node
 - `session_id` (identifies an ongoing conversation) is a fundamentally different concept from `thread_id`-style caching (matching on identical repeatable inputs) — free-form questions can't be reliably deduplicated the same way structured quiz inputs can
+
+---
+
+## ✅ Phase 10 — Production Hardening: Config & Logging (Complete)
+
+- Moved all hardcoded config (API keys, model names, paths, collection names) to `.env`
+- Created `.env.example` for documentation, added `.env` to `.gitignore`
+- Replaced `print()` statements with proper `logging` module (INFO/WARNING levels, timestamped output via `logging.basicConfig()`)
+- Discovered Groq API rate limiting (429) happens in real usage — confirmed `langchain-groq`'s built-in retry logic handles it automatically
+
+**Files:** `rag_api.py`, `index_codebase.py`, `.env`, `.env.example`
+
+### Key learnings
+- `os.getenv()` and `os.environ.get()` are functionally identical
+- `logging.basicConfig()` configures the root logger, which third-party libraries (httpx, sentence-transformers) also report through — explains why external library logs (e.g. Groq HTTP requests) appear alongside application logs
+- `logging.getLogger(__name__)` names the logger after the current module, using Python's built-in `__name__` variable
+
+---
+
+## ✅ Phase 11 — Production Hardening: Error Handling & Retry Resilience (Complete)
+
+- Wrapped every external call (LLM invocations, ChromaDB queries, SQLite operations) in try/except blocks
+- Each failure point has a sensible fallback: query rewriting failure → use original question; retrieval failure → empty chunks; generation failure → user-friendly error message; history fetch/save failures → logged but don't block the user from getting an answer
+- Separated fetch/save history into independent try/except blocks so a save failure never discards an already-generated answer
+- Added a warning log when the LLM itself determines retrieved code isn't relevant (a semantic check complementing the earlier mechanical distance threshold)
+
+**Files:** `rag_api.py`
+
+### Key learnings
+- Python does not have block-scoping like JavaScript — variables assigned inside `try`/`except`/`if` blocks remain accessible afterward, as long as one branch always executes
+- Two complementary safety nets exist for irrelevant questions: a mechanical distance threshold (fast, catches extreme mismatches) and LLM-based semantic judgment (catches subtler mismatches the threshold misses)
