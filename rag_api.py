@@ -10,7 +10,11 @@ from langgraph.graph import StateGraph,END,START
 from pydantic import BaseModel
 import re
 from typing import TypedDict, Annotated, Literal
+from dotenv import load_dotenv
+import os
 
+#load env file
+load_dotenv()
 
 #instance of the fastapi
 app = FastAPI()
@@ -29,12 +33,12 @@ embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
 )
 
 #Initializing the model
-llm = ChatGroq(model="qwen/qwen3.6-27b", max_tokens=4096)
+llm = ChatGroq(model=os.getenv("LLM_MODEL"), max_tokens=4096)
 
 #connecting to DB
-client = chromadb.PersistentClient('./chroma_db_v2')
+client = chromadb.PersistentClient(path=os.getenv("CHROMA_DB_PATH"))
 collection = client.get_collection(
-    name = 'ABHI-CHORD-Full-Backend',
+    name = os.getenv("COLLECTION_NAME"),
     embedding_function = embedding_function
 )
 
@@ -146,7 +150,7 @@ def ask_question(state: QuestionRequest):
     session_id = state.session_id
     #fetching history
     cursor = conn.cursor()
-    cursor.execute("SELECT question, answer from conversation_history where session_id=? ORDER BY timestamp DESC LIMIT 3",(session_id,))
+    cursor.execute("SELECT question, answer from conversation_history where session_id=? ORDER BY timestamp DESC LIMIT 3",(session_id,))       # comma added as sqlite's execute command excepts a tuple, and without the comma it is treated as a string
     history = cursor.fetchall()
     conn.commit()
     result = agent.invoke({"chunks":[], "user_question": state.question, "result":'', "sources": [], "history": history})

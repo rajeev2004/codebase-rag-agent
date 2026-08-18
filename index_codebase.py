@@ -4,6 +4,10 @@ import tree_sitter_javascript as tsjs
 from tree_sitter import Language,Parser
 import chromadb
 from chromadb.utils import embedding_functions
+from dotenv import load_dotenv
+
+#loading env variables
+load_dotenv()
 
 #setting the parser
 JS_LANGUAGE = Language(tsjs.language())
@@ -13,9 +17,9 @@ parser = Parser(JS_LANGUAGE)
 embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
     model_name="all-MiniLM-L6-v2"
 )
-client = chromadb.PersistentClient(path='./chroma_db_v2')
+client = chromadb.PersistentClient(path=os.getenv("CHROMA_DB_PATH"))
 collection = client.create_collection(
-    name="ABHI-CHORD-Full-Backend",
+    name=os.getenv("COLLECTION_NAME"),
     embedding_function=embedding_function
 )
 
@@ -79,14 +83,15 @@ def extract_chunk_treesitter(content):
     return chunks
 
 #embedding only these folder
+ABHI_CHORD_PATH = os.getenv("ABHI_CHORD_PATH")
 TARGET_FOLDERS = [
-    "/home/rajeev/circlehealthNew/abhi-chord/packages/backend/src/routes",
-    "/home/rajeev/circlehealthNew/abhi-chord/packages/backend/src/logic",
-    "/home/rajeev/circlehealthNew/abhi-chord/packages/backend/src/common",
-    "/home/rajeev/circlehealthNew/abhi-chord/packages/backend/src/middleware",
-    "/home/rajeev/circlehealthNew/abhi-chord/packages/backend/src/partners",
-    "/home/rajeev/circlehealthNew/abhi-chord/packages/backend/src/cron",
-    "/home/rajeev/circlehealthNew/abhi-chord/packages/backend/migrations"
+    os.path.join(ABHI_CHORD_PATH, "packages/backend/src/routes"),
+    os.path.join(ABHI_CHORD_PATH, "packages/backend/src/logic"),
+    os.path.join(ABHI_CHORD_PATH, "packages/backend/src/common"),
+    os.path.join(ABHI_CHORD_PATH, "packages/backend/src/middleware"),
+    os.path.join(ABHI_CHORD_PATH, "packages/backend/src/partners"),
+    os.path.join(ABHI_CHORD_PATH, "packages/backend/src/cron"),
+    os.path.join(ABHI_CHORD_PATH, "packages/backend/migrations"),
 ]
 
 #storing all the chunks here

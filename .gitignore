@@ -6,3 +6,4 @@ chroma_db_v2/
 *.db
 *.db-shm
 *.db-wal
+.env
