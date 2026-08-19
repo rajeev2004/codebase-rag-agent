@@ -156,3 +156,26 @@ Before searching ChromaDB, use the LLM to rewrite the user's natural-language qu
 ### Key learnings
 - Python does not have block-scoping like JavaScript — variables assigned inside `try`/`except`/`if` blocks remain accessible afterward, as long as one branch always executes
 - Two complementary safety nets exist for irrelevant questions: a mechanical distance threshold (fast, catches extreme mismatches) and LLM-based semantic judgment (catches subtler mismatches the threshold misses)
+
+---
+
+## ✅ Phase 12 — Incremental Re-Indexing (Complete)
+
+- Built a content-hash-based change detection system to avoid full re-indexing on every run
+- Added `file_index_tracking` SQLite table (`file_path` PRIMARY KEY, `content_hash`, `last_indexed`)
+- On each indexing run: compute SHA256 hash of each file's content, compare against stored hash
+  - Unchanged files → skipped entirely (no re-chunking, no re-embedding)
+  - Changed files → old chunks deleted from ChromaDB (via `file_path` metadata filter), file re-chunked and re-embedded, tracking table updated
+  - New files → chunked, embedded, and added to tracking table
+  - Deleted files (tracked previously but no longer found on disk) → chunks removed from ChromaDB, tracking row deleted
+- Switched from `create_collection` to `get_or_create_collection` to support repeated runs against the same collection
+- Guarded the final `collection.add()` call against empty chunk lists (ChromaDB rejects empty add requests)
+- Verified end-to-end: fresh index (2294 chunks) → re-run unchanged (0 chunks, all skipped) → edit one file → re-run (5 chunks, only the changed file reprocessed, tracking table correctly updated without being wiped)
+
+**Files:** `index_codebase.py` (rewritten with incremental logic), `indexing_tracker.db` (new tracking database, gitignored)
+
+### Key learnings / bugs debugged
+- `fetchall()` on a single-column query returns a list of tuples, not plain values — must extract with `row[0]`, otherwise string comparisons silently fail (caused the entire tracking table to be wiped on the second run)
+- Deleted-file detection logic must iterate over *previously tracked* files checking against the *current* file list — not the reverse (which instead finds newly added files)
+- Metadata filter key names must match exactly (`file_path` vs `file_paths` typo caused a silent no-op delete)
+- Python does not have block scoping — but SQLite tuple-vs-string mismatches are a much easier trap to fall into when reading query results
