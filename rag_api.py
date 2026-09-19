@@ -13,6 +13,8 @@ from typing import TypedDict, Annotated, Literal
 from dotenv import load_dotenv
 import os
 import logging
+from sentence_transformers import CrossEncoder
+reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 
 #load env file
 load_dotenv()
@@ -98,7 +100,7 @@ def retrieve_chunk(state: CodeRetrievalAgent):
         logger.error(f"Query rewriting fails, using user typed question: {e}")
         updated_cleaner_question = question
     try:
-        response = collection.query(query_texts=[updated_cleaner_question], n_results=5)
+        response = collection.query(query_texts=[updated_cleaner_question], n_results=10)
     except Exception as e:
         logger.error("Error while fetching data from DB")
         return {"chunks":[]}
@@ -117,8 +119,32 @@ def retrieve_chunk(state: CodeRetrievalAgent):
         content = documents[i][:800]
         prompt.append(f"file_path: {file_path}, content: {content}")
         sources.append(file_path)
-    unique_sources = list(set(sources))
-    return {"chunks": prompt, "sources": unique_sources}
+    return {"chunks": prompt, "sources": sources}
+
+#funciton to re-rank chunks for better answer for the user
+def rerank_chunks(state: CodeRetrievalAgent):
+    question = state['user_question']
+    chunks = state['chunks']
+    sources = state['sources']
+    if chunks == []:
+        return {'result': 'Sorry I Could not find any relevant data.'}
+    paired_chunks = []
+    for chunk in chunks:
+        pair = (question, chunk)
+        paired_chunks.append(pair)
+    try:
+        scores = reranker.predict(paired_chunks)
+        combined = list(zip(chunks, sources, scores))
+        combined_sorted = sorted(combined, key=lambda x: x[2], reverse=True)
+        top_5 = combined_sorted[:5]
+        reranked_chunks = [item[0] for item in top_5]
+        reranked_sources = [item[1] for item in top_5]
+        unique_sources = list(set(reranked_sources))
+        return {"chunks": reranked_chunks, "sources": unique_sources}
+    except Exception as e:
+        logger.error(f"Re-ranking failed, falling back to the original output reteieved by the model, {e}")
+        return {"chunks": chunks[:5], "sources": list(set(sources[:5]))}
+    
 
 #function to generate the final answer
 def generate_answer(state: CodeRetrievalAgent):
@@ -152,13 +178,15 @@ graph = StateGraph(CodeRetrievalAgent)
 
 #adding nodes
 graph.add_node("retrieve_chunk", retrieve_chunk)
+graph.add_node("rerank_chunks", rerank_chunks)
 graph.add_node("generate_answer", generate_answer)
 
 #starting point
 graph.set_entry_point("retrieve_chunk")
 
 #adding edges
-graph.add_edge("retrieve_chunk", "generate_answer")
+graph.add_edge("retrieve_chunk", "rerank_chunks")
+graph.add_edge("rerank_chunks", "generate_answer")
 
 #ending point
 graph.add_edge("generate_answer", END)

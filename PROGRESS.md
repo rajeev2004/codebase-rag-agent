@@ -179,3 +179,22 @@ Before searching ChromaDB, use the LLM to rewrite the user's natural-language qu
 - Deleted-file detection logic must iterate over *previously tracked* files checking against the *current* file list — not the reverse (which instead finds newly added files)
 - Metadata filter key names must match exactly (`file_path` vs `file_paths` typo caused a silent no-op delete)
 - Python does not have block scoping — but SQLite tuple-vs-string mismatches are a much easier trap to fall into when reading query results
+
+---
+
+## ✅ Phase 13 — Cross-Encoder Re-Ranking (Complete)
+
+- Widened initial ChromaDB retrieval from 5 to 10 candidates
+- Added a dedicated re-ranking step using `cross-encoder/ms-marco-MiniLM-L-6-v2` (via `sentence-transformers`) — a model purpose-built for scoring (query, document) pairs jointly, more precise than comparing separately-computed embedding vectors
+- New `rerank_chunks` node inserted between `retrieve_chunk` and `generate_answer`: builds (question, chunk) pairs, scores them with the cross-encoder, sorts by score, keeps top 5
+- Removed premature source deduplication from `retrieve_chunk` (was breaking the parallel chunks/sources/scores alignment needed for `zip()`-based sorting) — deduplication now happens after re-ranking finalizes the top 5
+- Verified empirically with before/after logging: for the "diet plan generation" question, `mealtags.js` moved from rank 7 (by raw embedding distance) to rank 2 (after re-ranking) — concrete proof the cross-encoder performs genuine, independent relevance judgment rather than passing through ChromaDB's original order
+- Fixed a model deprecation issue along the way — `qwen/qwen3.6-27b` was retired by Groq; switched to `openai/gpt-oss-120b` (also free tier)
+
+**Files:** `rag_api.py`
+
+### Key learnings
+- Bi-encoders (embedding models) encode query and document separately, then compare vectors — fast, enables pre-computation, but less precise
+- Cross-encoders process query and document together in one pass — slower (can't pre-compute), but more accurate at judging relevance — the standard "retrieve wide with bi-encoder, re-rank narrow with cross-encoder" pattern used in production RAG systems
+- `CrossEncoder.predict(pairs)` returns raw scores in the SAME order as input — it does not sort; sorting is the caller's responsibility (via `zip()` + `sorted(..., key=lambda x: x[2], reverse=True)`)
+- Cross-encoder scores are unbounded logits (can be negative) — only relative ranking matters, not absolute thresholds
