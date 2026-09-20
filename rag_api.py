@@ -14,6 +14,9 @@ from dotenv import load_dotenv
 import os
 import logging
 from sentence_transformers import CrossEncoder
+from rank_bm25 import BM25Okapi
+
+#Adding re-ranker
 reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 
 #load env file
@@ -42,12 +45,30 @@ embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
 #Initializing the model
 llm = ChatGroq(model=os.getenv("LLM_MODEL"), max_tokens=4096)
 
+STOP_WORDS = {"a", "an", "the", "is", "are", "and", "or", "of", "to", "in", "on", "for", "with", "from", "this", "that"}
+
+#tokemize the words for keyword searching
+def tokenize(text):
+    raw_words = re.findall(r'\w+', text)
+    tokens = []
+    for words in raw_words:
+        split_words = re.sub(r'([a-z])([A-Z])', r'\1 \2', words).replace('_', ' ')
+        tokens.extend(split_words.lower().split())
+    return [t for t in tokens if t not in STOP_WORDS]
+
 #connecting to DB
 client = chromadb.PersistentClient(path=os.getenv("CHROMA_DB_PATH"))
 collection = client.get_collection(
     name = os.getenv("COLLECTION_NAME"),
     embedding_function = embedding_function
 )
+
+#building bm25 by fetching all data from the collection
+all_data = collection.get()
+bm25_documents = all_data['documents']
+bm25_metadatas = all_data['metadatas']
+tokenized_corpus = [tokenize(doc) for doc in bm25_documents]
+bm25_index = BM25Okapi(tokenized_corpus)
 
 #State of the agent
 class CodeRetrievalAgent(TypedDict):
@@ -71,6 +92,21 @@ conn.commit()
 class QuestionRequest(BaseModel):
     question: str
     session_id: str
+
+#function to retrieve the chunks based on keyword matching
+def bm25_search(query, top_k=5):
+    try:
+        tokenized_query = tokenize(query)
+        scores = bm25_index.get_scores(tokenized_query)
+        bm25_sources = [meta['file_path'] for meta in bm25_metadatas]
+        combined = list(zip(bm25_documents, bm25_sources, scores))
+        sorted_top_5 = sorted(combined, key=lambda x: x[2], reverse=True)[:top_k]
+        top_keyword_chunks = [item[0] for item in sorted_top_5]
+        top_keyword_sources = [item[1] for item in sorted_top_5]
+        return top_keyword_chunks, top_keyword_sources
+    except Exception as e:
+        logger.error(f"Key word searching failed, {e}")
+        return [],[]
 
 #function to retrieve the info. and build the prompt for the llm 
 def retrieve_chunk(state: CodeRetrievalAgent):
@@ -119,7 +155,25 @@ def retrieve_chunk(state: CodeRetrievalAgent):
         content = documents[i][:800]
         prompt.append(f"file_path: {file_path}, content: {content}")
         sources.append(file_path)
-    return {"chunks": prompt, "sources": sources}
+
+    #calling keyword match chunk retrieval
+    keyword_chunks, keyword_sources = bm25_search(updated_cleaner_question, 10)
+    formatted_keyword_chunks = []
+    for i in range(len(keyword_chunks)):
+        file_path = keyword_sources[i]
+        content = keyword_chunks[i][:800]
+        formatted_keyword_chunks.append(f"file_path: {file_path}, content: {content}")
+
+    combined_dict = {}
+    for chunk, source in zip(prompt, sources):
+        combined_dict[chunk] = source
+    for chunk, source in zip(formatted_keyword_chunks, keyword_sources):
+        combined_dict[chunk] = source
+
+    final_chunks = list(combined_dict.keys())
+    final_sources = list(combined_dict.values())
+    
+    return {"chunks": final_chunks, "sources": final_sources}
 
 #funciton to re-rank chunks for better answer for the user
 def rerank_chunks(state: CodeRetrievalAgent):

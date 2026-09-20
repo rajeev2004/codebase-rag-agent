@@ -198,3 +198,22 @@ Before searching ChromaDB, use the LLM to rewrite the user's natural-language qu
 - Cross-encoders process query and document together in one pass — slower (can't pre-compute), but more accurate at judging relevance — the standard "retrieve wide with bi-encoder, re-rank narrow with cross-encoder" pattern used in production RAG systems
 - `CrossEncoder.predict(pairs)` returns raw scores in the SAME order as input — it does not sort; sorting is the caller's responsibility (via `zip()` + `sorted(..., key=lambda x: x[2], reverse=True)`)
 - Cross-encoder scores are unbounded logits (can be negative) — only relative ranking matters, not absolute thresholds
+
+---
+
+## ✅ Phase 14 — Hybrid Search (Semantic + Keyword/BM25) (Complete)
+
+- Added BM25 keyword search alongside existing ChromaDB semantic search, addressing the weakness that pure embedding search can be imprecise for exact identifier lookups (specific function/table/variable names)
+- Built a custom code-aware tokenizer: regex-based word extraction, stop-word removal, and camelCase/snake_case splitting (e.g. `processClaimWebhook` → `process`, `claim`, `webhook`) — validated empirically that naive `.split()` tokenization fails to match multi-word identifiers, and that stop words can cause false-positive matches
+- BM25 index built once at server startup by pulling all chunks from ChromaDB via `collection.get()` — kept in sync automatically since it's rebuilt from whatever ChromaDB currently holds, no separate persistence needed
+- New `bm25_search()` helper function (not a graph node) mirrors the existing re-ranking sort pattern (zip + sorted by score descending)
+- `retrieve_chunk` now combines semantic (top 10) and keyword (top 10) results, deduplicated via a dict keyed by the full formatted chunk string, before passing the combined pool to the existing (unchanged) `rerank_chunks` node
+- Verified with a real test case: "what does processClaimWebhook do" — correctly retrieved the exact function via keyword matching and produced a comprehensive, accurate answer
+
+**Files:** `rag_api.py`
+
+### Key learnings
+- BM25 measures keyword overlap, not meaning — complementary to embeddings, which measure semantic similarity but can be imprecise on exact terms
+- Tokenization is used only internally for BM25's scoring math; the actual returned content remains the original untokenized text throughout
+- Scoring conventions differ by system: ChromaDB distance (lower = better) vs. cross-encoder/BM25 scores (higher = better) — both correctly handled in this codebase via `reverse=True` sorting where appropriate
+- Deduplication by exact chunk-string match is reliable here specifically because both retrieval paths (ChromaDB `.query()` and `.get()`) pull from the same underlying stored text with identical truncation applied
