@@ -101,8 +101,9 @@ def bm25_search(query, top_k=5):
         bm25_sources = [meta['file_path'] for meta in bm25_metadatas]
         combined = list(zip(bm25_documents, bm25_sources, scores))
         sorted_top_5 = sorted(combined, key=lambda x: x[2], reverse=True)[:top_k]
-        top_keyword_chunks = [item[0] for item in sorted_top_5]
-        top_keyword_sources = [item[1] for item in sorted_top_5]
+        matches = [item for item in sorted_top_5 if item[2] > 0]
+        top_keyword_chunks = [item[0] for item in matches]
+        top_keyword_sources = [item[1] for item in matches]
         return top_keyword_chunks, top_keyword_sources
     except Exception as e:
         logger.error(f"Key word searching failed, {e}")
@@ -115,6 +116,8 @@ def retrieve_chunk(state: CodeRetrievalAgent):
     # updated_cleaner_question = ''  Not necessary as python does not create blocks for if, else, try, except, for, while
     #Formatting the questions and the asnwers
     history_text = "\n".join([f"Q: {q}\nA: {a}" for q, a in history])
+    prompt = []
+    sources = []
     try:
         updated_question = llm.invoke(f"""You are a query optimization assistant for a code search system that uses semantic vector search.
 
@@ -138,23 +141,21 @@ def retrieve_chunk(state: CodeRetrievalAgent):
     try:
         response = collection.query(query_texts=[updated_cleaner_question], n_results=10)
     except Exception as e:
-        logger.error("Error while fetching data from DB")
-        return {"chunks":[]}
-    prompt = []
-    sources = []
-    documents = response['documents'][0]
-    metadatas = response['metadatas'][0]
-    distances = response['distances'][0]
-    logger.info(f"Best match distance: {distances[0]}")
-    # print(f"Best match distance: {distances[0]}") 
-    if distances[0] > 0.9:      # No relevant data found
-        logger.warning("No relevant chunk found for this question")
-        return {"chunks":[]}
-    for i in range(len(documents)):
-        file_path = metadatas[i]['file_path']
-        content = documents[i][:800]
-        prompt.append(f"file_path: {file_path}, content: {content}")
-        sources.append(file_path)
+        logger.error(f"Error while fetching data from DB: {e}")
+    else:
+        documents = response['documents'][0]
+        metadatas = response['metadatas'][0]
+        distances = response['distances'][0]
+        if documents:
+            logger.info(f"Best match distance: {distances[0]}")
+            if distances[0] <= 0.9:
+                for i in range(len(documents)):
+                    file_path = metadatas[i]['file_path']
+                    content = documents[i][:800]
+                    prompt.append(f"file_path: {file_path}, content: {content}")
+                    sources.append(file_path)
+            else:
+                logger.warning("Semantic results too far away, ignoring them")
 
     #calling keyword match chunk retrieval
     keyword_chunks, keyword_sources = bm25_search(updated_cleaner_question, 10)
@@ -172,6 +173,9 @@ def retrieve_chunk(state: CodeRetrievalAgent):
 
     final_chunks = list(combined_dict.keys())
     final_sources = list(combined_dict.values())
+
+    #printing final chunks length
+    logger.info(f"semantic={len(prompt)} keyword={len(formatted_keyword_chunks)} merged={len(final_chunks)}")
     
     return {"chunks": final_chunks, "sources": final_sources}
 
@@ -223,7 +227,7 @@ def generate_answer(state: CodeRetrievalAgent):
         logger.error(f"LLM did not produced the result")
         return {"result":"I am having trouble generating the response right now.", "sources":[]}
     cleaner_response = re.sub(r'<think>.*?</think>', '', response.content, flags=re.DOTALL).strip()
-    if "I couldn't find relevant code for this question." in cleaner_response:
+    if "find relevant code" in cleaner_response.lower():
         logger.warning("LLM could not find relevant code from the retrieved chunks")
     return {"result": cleaner_response, "sources": state["sources"]}
 
@@ -257,7 +261,7 @@ def ask_question(state: QuestionRequest):
     cursor = conn.cursor()
     try:
         cursor.execute("SELECT question, answer from conversation_history where session_id=? ORDER BY timestamp DESC LIMIT 3",(session_id,))       # comma added as sqlite's execute command excepts a tuple, and without the comma it is treated as a string
-        history = cursor.fetchall()
+        history = cursor.fetchall()[::-1]
         conn.commit()
     except Exception as e:
         history = []
