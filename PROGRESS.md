@@ -51,19 +51,19 @@ Building a Retrieval-Augmented Generation (RAG) system to answer questions about
 
 ---
 
-## 🔲 Phase 5 — Connect Retrieval to LLM (Complete)
+## ✅ Phase 5 — Connect Retrieval to LLM (Complete)
 
-- [ ] Build a function that takes a question, retrieves top chunks, and builds a prompt
-- [ ] Send prompt + retrieved code to Groq LLM
-- [ ] Get back a natural language answer grounded in real code
-- [ ] Wrap in LangGraph for proper agent structure
+- Build a function that takes a question, retrieves top chunks, and builds a prompt
+- Send prompt + retrieved code to Groq LLM
+- Get back a natural language answer grounded in real code
+- Wrap in LangGraph for proper agent structure
 
 ---
 
-## 🔲 Phase 6 — API + Web UI (Complete)
+## ✅ Phase 6 — API + Web UI (Complete)
 
-- [ ] FastAPI backend exposing the RAG agent
-- [ ] Simple web UI to ask questions and see answers with source file references
+- FastAPI backend exposing the RAG agent
+- Simple web UI to ask questions and see answers with source file references
 
 ---
 
@@ -217,3 +217,24 @@ Before searching ChromaDB, use the LLM to rewrite the user's natural-language qu
 - Tokenization is used only internally for BM25's scoring math; the actual returned content remains the original untokenized text throughout
 - Scoring conventions differ by system: ChromaDB distance (lower = better) vs. cross-encoder/BM25 scores (higher = better) — both correctly handled in this codebase via `reverse=True` sorting where appropriate
 - Deduplication by exact chunk-string match is reliable here specifically because both retrieval paths (ChromaDB `.query()` and `.get()`) pull from the same underlying stored text with identical truncation applied
+
+---
+
+## ✅ Phase 15 — Retrieval Hardening (Complete)
+
+- Reworked `retrieve_chunk` so the two retrieval paths are independent: a failed or distant semantic search no longer blocks keyword search. The 0.9 distance gate now only discards the semantic results, and the request ends empty only if both paths return nothing.
+- `bm25_search` now drops zero-score chunks. Before, a query with no keyword match returned arbitrary chunks in corpus order, and those flowed into the re-ranker.
+- Used `try/except/else` so the code that depends on the ChromaDB response runs only when the query succeeded.
+- Added a per-request log line (`semantic=… keyword=… merged=…`) to show which path contributed.
+- Fixed two small bugs: conversation history was reaching the LLM newest-first (now reversed), and the "no relevant code" warning never fired because the string comparison was case- and punctuation-sensitive.
+
+**Files:** `rag_api.py`
+
+### Key learnings
+- The distance gate rarely fires. Best distances were about 0.40-0.47 for real questions, 0.59 for an off-topic one, and 0.75 for gibberish, all under 0.9. The LLM's own "couldn't find relevant code" check does the real rejecting.
+- `else` after `try/except` runs only if the `try` raised nothing.
+
+### ⚠️ Known limitations / next steps
+- BM25 is built at server startup, so it goes stale if indexing runs while the server is up. Restart after re-indexing.
+- Off-topic questions still send 5 irrelevant chunks to the LLM before it refuses, which spends tokens.
+- Next: Docker and deployment.
