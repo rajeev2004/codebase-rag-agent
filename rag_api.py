@@ -46,6 +46,9 @@ embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
 llm = ChatGroq(model=os.getenv("LLM_MODEL"), max_tokens=4096)
 
 STOP_WORDS = {"a", "an", "the", "is", "are", "and", "or", "of", "to", "in", "on", "for", "with", "from", "this", "that"}
+RERANK_CHARS = 1200     # how much of each chunk the cross-encoder reads
+TOP_CHARS = 4000        # context kept for the 2 best chunks
+REST_CHARS = 800        # context kept for the other 3
 
 #tokemize the words for keyword searching
 def tokenize(text):
@@ -134,7 +137,8 @@ def retrieve_chunk(state: CodeRetrievalAgent):
 
                     New question: {question}"""
                 )
-        updated_cleaner_question = re.sub(r'<think>.*?</think>', '', updated_question.content, flags=re.DOTALL).strip().lower()
+        updated_cleaner_question = re.sub(r'<think>.*?</think>', '', updated_question.content, flags=re.DOTALL).strip()
+        logger.info(f"Rewritten query: {updated_cleaner_question}")
     except Exception as e:
         logger.error(f"Query rewriting fails, using user typed question: {e}")
         updated_cleaner_question = question
@@ -151,7 +155,7 @@ def retrieve_chunk(state: CodeRetrievalAgent):
             if distances[0] <= 0.9:
                 for i in range(len(documents)):
                     file_path = metadatas[i]['file_path']
-                    content = documents[i][:800]
+                    content = documents[i]
                     prompt.append(f"file_path: {file_path}, content: {content}")
                     sources.append(file_path)
             else:
@@ -162,7 +166,7 @@ def retrieve_chunk(state: CodeRetrievalAgent):
     formatted_keyword_chunks = []
     for i in range(len(keyword_chunks)):
         file_path = keyword_sources[i]
-        content = keyword_chunks[i][:800]
+        content = keyword_chunks[i]
         formatted_keyword_chunks.append(f"file_path: {file_path}, content: {content}")
 
     combined_dict = {}
@@ -179,6 +183,9 @@ def retrieve_chunk(state: CodeRetrievalAgent):
     
     return {"chunks": final_chunks, "sources": final_sources}
 
+def trim_by_position(chunks):
+    return [c[:TOP_CHARS] if i < 2 else c[:REST_CHARS] for i, c in enumerate(chunks)]
+
 #funciton to re-rank chunks for better answer for the user
 def rerank_chunks(state: CodeRetrievalAgent):
     question = state['user_question']
@@ -188,20 +195,20 @@ def rerank_chunks(state: CodeRetrievalAgent):
         return {'result': 'Sorry I Could not find any relevant data.'}
     paired_chunks = []
     for chunk in chunks:
-        pair = (question, chunk)
+        pair = (question, chunk[:RERANK_CHARS])
         paired_chunks.append(pair)
     try:
         scores = reranker.predict(paired_chunks)
         combined = list(zip(chunks, sources, scores))
         combined_sorted = sorted(combined, key=lambda x: x[2], reverse=True)
         top_5 = combined_sorted[:5]
-        reranked_chunks = [item[0] for item in top_5]
+        reranked_chunks = trim_by_position([item[0] for item in top_5])
         reranked_sources = [item[1] for item in top_5]
         unique_sources = list(set(reranked_sources))
         return {"chunks": reranked_chunks, "sources": unique_sources}
     except Exception as e:
         logger.error(f"Re-ranking failed, falling back to the original output reteieved by the model, {e}")
-        return {"chunks": chunks[:5], "sources": list(set(sources[:5]))}
+        return {"chunks": trim_by_position(chunks[:5]), "sources": list(set(sources[:5]))}
     
 
 #function to generate the final answer
@@ -218,7 +225,7 @@ def generate_answer(state: CodeRetrievalAgent):
                 If there is conversation history, use it to understand context or references in the current question.
                 If the provided code does NOT actually relate to or answer the question, 
                 clearly say "I couldn't find relevant code for this question" instead of guessing or forcing an answer.
-                Otherwise, answer based on the code provided and cite the filepath."""
+                Otherwise, answer based on the code provided and cite the filepath. If a code snippet looks cut off, say what is missing. Do not guess function names or behavior."""
     chunks_text = "\n\n".join(state['chunks'])
     prompt = f"{message}\n\nQuestion: {question}\n\nRelevant Code:\n{chunks_text}\n\nHistory:\n{history_text}"
     try:
