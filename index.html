@@ -143,6 +143,7 @@
         margin-bottom: 4px;
         word-break: break-all;
     }
+    .sources:empty { display: none; }
 
 </style>
 </head>
@@ -150,7 +151,7 @@
     <div class="container">
         <h2>ABHI Rag Agent</h2>
         <div class="search-box">
-            <input name="ask_question" id="ask_question" placeholder="Type your question..." />
+            <input name="ask_question" id="ask_question" placeholder="Type your question..." maxlength="500" />
             <button onclick="answerQuestion()" id="answerBtn">Answer</button>
         </div>
         <div class="status"></div>
@@ -173,12 +174,13 @@
             const status = document.querySelector('.status')
             const answerBody = document.querySelector('.answer_body')
             const btn = document.getElementById('answerBtn')
-            sourcesBody = document.querySelector('.sources')
+            const sourcesBody = document.querySelector('.sources')
 
             btn.disabled = true
             btn.textContent = 'Thinking...'
             status.innerText = "Hang on, I am generating your answer"
             answerBody.innerHTML = ""
+            sourcesBody.innerHTML = ""
 
             try{
                 const response = await fetch('http://127.0.0.1:8003/ask', {
@@ -187,6 +189,12 @@
                     body: JSON.stringify({question: question, session_id: session_id})
                 })
                 const data = await response.json()
+                if(!response.ok){
+                    status.innerText = (typeof data.detail === 'string')
+                        ? data.detail
+                        : "Please enter a question under 500 characters";
+                    return
+                }
                 answerBody.innerHTML = marked.parse(data.answer)
                 let sourcesHtml = '<strong>Sources:</strong><ul>'
                 data.sources.forEach(source => {
@@ -197,10 +205,11 @@
                 status.innerText = ""
             }catch(err){
                 status.innerText = `⚠️ Oops! Could not generate an answer. Is the server running?`
-            }
+            }finally{
+                btn.disabled = false
+                btn.textContent = 'Answer'
 
-            btn.disabled = false
-            btn.textContent = 'Answer'
+            }
         }
     </script>
 </body>

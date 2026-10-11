@@ -1,13 +1,13 @@
 #necessary imports
 import sqlite3
 import datetime
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 import chromadb
 from chromadb.utils import embedding_functions
 from langchain_groq import ChatGroq
 from langgraph.graph import StateGraph,END,START
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import re
 from typing import TypedDict, Annotated, Literal
 from dotenv import load_dotenv
@@ -15,6 +15,8 @@ import os
 import logging
 from sentence_transformers import CrossEncoder
 from rank_bm25 import BM25Okapi
+import time
+from collections import defaultdict, deque
 
 #Adding re-ranker
 reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
@@ -49,6 +51,19 @@ STOP_WORDS = {"a", "an", "the", "is", "are", "and", "or", "of", "to", "in", "on"
 RERANK_CHARS = 1200     # how much of each chunk the cross-encoder reads
 TOP_CHARS = 4000        # context kept for the 2 best chunks
 REST_CHARS = 800        # context kept for the other 3
+RATE_LIMIT = 10         # requests allowed
+RATE_WINDOW = 60        # per this many seconds
+request_log = defaultdict(deque)
+
+def is_rate_limited(key):
+    now = time.time()
+    log = request_log[key]
+    while log and now - log[0] > RATE_WINDOW:
+        log.popleft()                  # drop timestamps outside the window
+    if len(log) >= RATE_LIMIT:
+        return True
+    log.append(now)
+    return False
 
 #tokemize the words for keyword searching
 def tokenize(text):
@@ -93,8 +108,8 @@ cursor.execute("""CREATE TABLE IF NOT EXISTS conversation_history (
 conn.commit()
 #Request modal
 class QuestionRequest(BaseModel):
-    question: str
-    session_id: str
+    question: str = Field(min_length=1, max_length=500, description="Question typed by the user")
+    session_id: str = Field(min_length=1, max_length=64)
 
 #function to retrieve the chunks based on keyword matching
 def bm25_search(query, top_k=5):
@@ -131,6 +146,7 @@ def retrieve_chunk(state: CodeRetrievalAgent):
                     2. Convert the result into a SHORT, keyword-focused search query (not a full sentence) — remove filler words like "how does", "work", "explain".
                     3. Focus on the CORE technical concepts and terms.
                     4. Return ONLY the search query. No explanations, no extra text, no quotes.
+                    5. Only use technical terms that appear in the question or the conversation history. Never invent function or table names.
 
                     Conversation history:
                     {history_text}
@@ -192,13 +208,14 @@ def rerank_chunks(state: CodeRetrievalAgent):
     chunks = state['chunks']
     sources = state['sources']
     if chunks == []:
-        return {'result': 'Sorry I Could not find any relevant data.'}
+        return {'chunks': [], 'sources': [], 'result': 'Sorry I Could not find any relevant data.'}
     paired_chunks = []
     for chunk in chunks:
         pair = (question, chunk[:RERANK_CHARS])
         paired_chunks.append(pair)
     try:
         scores = reranker.predict(paired_chunks)
+        logger.info(f"Top rerank score: {max(scores):.2f}")
         combined = list(zip(chunks, sources, scores))
         combined_sorted = sorted(combined, key=lambda x: x[2], reverse=True)
         top_5 = combined_sorted[:5]
@@ -225,7 +242,8 @@ def generate_answer(state: CodeRetrievalAgent):
                 If there is conversation history, use it to understand context or references in the current question.
                 If the provided code does NOT actually relate to or answer the question, 
                 clearly say "I couldn't find relevant code for this question" instead of guessing or forcing an answer.
-                Otherwise, answer based on the code provided and cite the filepath. If a code snippet looks cut off, say what is missing. Do not guess function names or behavior."""
+                Otherwise, answer based on the code provided and cite the filepath. If a code snippet looks cut off, say what is missing. Do not guess function names or behavior.
+                Do not write pseudo-code or invent function names. Describe only what appears in the provided code."""
     chunks_text = "\n\n".join(state['chunks'])
     prompt = f"{message}\n\nQuestion: {question}\n\nRelevant Code:\n{chunks_text}\n\nHistory:\n{history_text}"
     try:
@@ -261,9 +279,13 @@ agent = graph.compile()
 
 #api route: when users ask a question
 @app.post('/ask')
-def ask_question(state: QuestionRequest):
+def ask_question(state: QuestionRequest, request: Request):
     logger.info(f"Question asked: {state.question}")
     session_id = state.session_id
+    if is_rate_limited(request.client.host):
+        raise HTTPException(status_code=429, detail="Too many requests, please wait a minute")
+    if not state.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty")
     #fetching history
     cursor = conn.cursor()
     try:
