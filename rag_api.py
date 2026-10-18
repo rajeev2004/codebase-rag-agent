@@ -49,8 +49,8 @@ llm = ChatGroq(model=os.getenv("LLM_MODEL"), max_tokens=4096)
 
 STOP_WORDS = {"a", "an", "the", "is", "are", "and", "or", "of", "to", "in", "on", "for", "with", "from", "this", "that"}
 RERANK_CHARS = 1200     # how much of each chunk the cross-encoder reads
-TOP_CHARS = 4000        # context kept for the 2 best chunks
-REST_CHARS = 800        # context kept for the other 3
+PER_CHUNK_CAP = 3000    # Budget for every re-ranked chunk
+TOTAL_BUDGET = 10000    # Total budget for the 5 re-ranked chunks
 RATE_LIMIT = 10         # requests allowed
 RATE_WINDOW = 60        # per this many seconds
 request_log = defaultdict(deque)
@@ -199,8 +199,14 @@ def retrieve_chunk(state: CodeRetrievalAgent):
     
     return {"chunks": final_chunks, "sources": final_sources}
 
-def trim_by_position(chunks):
-    return [c[:TOP_CHARS] if i < 2 else c[:REST_CHARS] for i, c in enumerate(chunks)]
+def trim_by_budget(chunks):
+    out, remaining = [], TOTAL_BUDGET
+    for c in chunks:
+        piece = c[:min(PER_CHUNK_CAP,remaining)]
+        if piece:
+            out.append(piece)
+        remaining-=len(piece)
+    return out
 
 #funciton to re-rank chunks for better answer for the user
 def rerank_chunks(state: CodeRetrievalAgent):
@@ -219,13 +225,16 @@ def rerank_chunks(state: CodeRetrievalAgent):
         combined = list(zip(chunks, sources, scores))
         combined_sorted = sorted(combined, key=lambda x: x[2], reverse=True)
         top_5 = combined_sorted[:5]
-        reranked_chunks = trim_by_position([item[0] for item in top_5])
+        combined_top_5_chunks = []
+        for item in top_5:
+            combined_top_5_chunks.append(item[0])
+        reranked_chunks = trim_by_budget(combined_top_5_chunks)
         reranked_sources = [item[1] for item in top_5]
         unique_sources = list(set(reranked_sources))
         return {"chunks": reranked_chunks, "sources": unique_sources}
     except Exception as e:
         logger.error(f"Re-ranking failed, falling back to the original output reteieved by the model, {e}")
-        return {"chunks": trim_by_position(chunks[:5]), "sources": list(set(sources[:5]))}
+        return {"chunks": trim_by_budget(chunks[:5]), "sources": list(set(sources[:5]))}
     
 
 #function to generate the final answer

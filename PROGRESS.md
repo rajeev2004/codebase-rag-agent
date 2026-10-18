@@ -220,21 +220,53 @@ Before searching ChromaDB, use the LLM to rewrite the user's natural-language qu
 
 ---
 
-## ✅ Phase 15 — Retrieval Hardening (Complete)
+## ✅ Phase 15 — Retrieval Hardening & Answer Context (Complete)
 
 - Reworked `retrieve_chunk` so the two retrieval paths are independent: a failed or distant semantic search no longer blocks keyword search. The 0.9 distance gate now only discards the semantic results, and the request ends empty only if both paths return nothing.
 - `bm25_search` now drops zero-score chunks. Before, a query with no keyword match returned arbitrary chunks in corpus order, and those flowed into the re-ranker.
 - Used `try/except/else` so the code that depends on the ChromaDB response runs only when the query succeeded.
-- Added a per-request log line (`semantic=… keyword=… merged=…`) to show which path contributed.
+- Fixed a casing bug: the rewritten query was lowercased before keyword search, which destroyed the camelCase split in the tokenizer, so identifier queries could not match. Lowercasing now happens only inside `tokenize`.
+- Chunks are no longer cut at 800 characters during retrieval. The cross-encoder scores only the first part of each chunk (`RERANK_CHARS`), and after re-ranking the two best chunks keep much more context (`TOP_CHARS`) than the other three (`REST_CHARS`). This fixed answers that stopped halfway through long functions.
+- Prompt changes: the query-rewrite step may only use terms from the question or history (it was inventing identifiers), and the answer step must not write pseudo-code or invent function names.
+- Added log lines for the rewritten query, per-path result counts (`semantic=… keyword=… merged=…`) and the top re-rank score.
 - Fixed two small bugs: conversation history was reaching the LLM newest-first (now reversed), and the "no relevant code" warning never fired because the string comparison was case- and punctuation-sensitive.
 
 **Files:** `rag_api.py`
 
 ### Key learnings
+- Cleaning steps must run in the right order: anything that depends on capitalization (camelCase splitting) has to run before lowercasing.
 - The distance gate rarely fires. Best distances were about 0.40-0.47 for real questions, 0.59 for an off-topic one, and 0.75 for gibberish, all under 0.9. The LLM's own "couldn't find relevant code" check does the real rejecting.
+- Tried a score-based gate on the cross-encoder and dropped it: some answerable questions scored lower than off-topic ones, so no threshold separates them.
+- A chunk is cut differently at each stage: a short copy is used for scoring, and the full chunk (trimmed by position) goes to the LLM. This replaced the fixed 800-character cut mentioned in Phase 7.
 - `else` after `try/except` runs only if the `try` raised nothing.
+- Replaced position-based trimming (`TOP_CHARS`/`REST_CHARS`) with budget-based trimming (`PER_CHUNK_CAP`, `TOTAL_BUDGET`): walks chunks in ranked order and gives each up to `PER_CHUNK_CAP` characters until `TOTAL_BUDGET` is used up, so the top-ranked chunk gets real context regardless of which position it lands in.
 
 ### ⚠️ Known limitations / next steps
+- Trimming is now by a shared character budget across the top 5 chunks (3000 per chunk, 10000 total) rather than a fixed position. Verified this fixed a case where the most relevant chunk landed in slot 3+ and was previously capped at 800 characters regardless of relevance.
+- Very long functions are still cut off. Plan: split long functions at indexing time into overlapping pieces.
+- The query rewrite varies from run to run, so retrieval varies too.
 - BM25 is built at server startup, so it goes stale if indexing runs while the server is up. Restart after re-indexing.
-- Off-topic questions still send 5 irrelevant chunks to the LLM before it refuses, which spends tokens.
+- Off-topic questions still send 5 irrelevant chunks to the LLM before it refuses.
+
+---
+
+## ✅ Phase 16 — Input Validation & Rate Limiting (Complete)
+
+- Request model uses Pydantic `Field` limits (question 1-500 characters, session id 1-64). FastAPI rejects violations with a 422 before the route runs.
+- Added an explicit check for whitespace-only questions (400), since a minimum length counts spaces.
+- Added a per-IP sliding-window rate limiter (10 requests per 60 seconds, 429 on excess), using a dictionary of timestamp deques. The checks run before any history lookup or LLM call, so rejected requests cost nothing and write nothing to history.
+- Frontend: `maxlength` on the input, `response.ok` handling that shows the server's message, a `finally` block that always re-enables the button, and hiding of the empty sources box.
+- Tested: empty, whitespace-only and over-length questions gave 422, 400 and 422. Eleven rapid requests gave ten 200s and one 429, and the history table grew by exactly 10 rows.
+
+**Files:** `rag_api.py`, `index.html`
+
+### Key learnings
+- Pydantic validation is automatic: the type hint on the route parameter triggers it on every request, and the route body never runs for a rejected request.
+- A 422 `detail` is a list of errors, while a raised `HTTPException` gives a plain string, so the frontend must handle both.
+- Rate-limit checks must sit above any `try/except Exception`, or the handler would swallow the `HTTPException`.
+- The limiter keys on IP and not session id, because a caller can generate a new session id on every request.
+
+### ⚠️ Known limitations / next steps
+- Counters live in one process's memory. They reset on restart and aren't shared between workers. Behind a reverse proxy, the client IP must come from `X-Forwarded-For`.
+- CORS is still open (`*`) and the frontend still calls a hardcoded local address.
 - Next: Docker and deployment.
