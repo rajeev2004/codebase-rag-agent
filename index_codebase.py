@@ -104,6 +104,39 @@ def get_stored_hash(file_path):
     else:
         return None
 
+#To split chunks bigger than 2000 characters
+CHUNK_SPLIT_THRESHOLD = 2000
+SPLIT_PIECE_SIZE = 1500
+SPLIT_OVERLAP = 300
+
+def split_long_chunks(chunks):
+    result = []
+    for chunk in chunks:
+        if len(chunk) <= CHUNK_SPLIT_THRESHOLD:
+            result.append(chunk)
+        else:
+            lines = chunk.split("\n")
+            code_start_index = 0
+            for idx, line in enumerate(lines):
+                stripped = line.strip()
+                if stripped and not stripped.startswith(("//", "/*", "*")):
+                    code_start_index = idx
+                    break
+
+            real_code = "\n".join(lines[code_start_index:])
+            header = real_code[:150].strip()
+
+            start = 0
+            piece_num = 0
+            while start < len(chunk):
+                piece = chunk[start : start + SPLIT_PIECE_SIZE]
+                if piece_num > 0:
+                    piece = f"// continuation of: {header}\n{piece}"
+                result.append(piece)
+                start += SPLIT_PIECE_SIZE - SPLIT_OVERLAP
+                piece_num += 1
+    return result
+
 #embedding only these folder
 ABHI_CHORD_PATH = os.getenv("ABHI_CHORD_PATH")
 TARGET_FOLDERS = [
@@ -148,6 +181,8 @@ for path in file_paths:
                 tracking_cursor.execute("Insert into file_index_tracking values(?,?,?)",(path, current_hash,str(datetime.datetime.now())))
             tracking_conn.commit()
             
+            chunks = split_long_chunks(chunks)
+
             for i, chunk in enumerate(chunks):
                 all_chunks.append({
                     "content": chunk,

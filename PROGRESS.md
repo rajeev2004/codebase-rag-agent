@@ -298,3 +298,24 @@ Before searching ChromaDB, use the LLM to rewrite the user's natural-language qu
 - The in-memory rate limiter still resets on every container restart and would under-limit across multiple worker processes — needs a shared store (e.g. Redis) before any real multi-worker or always-on deployment.
 - No image has been pushed to a registry (e.g. Docker Hub) yet — currently, running this requires building locally from the Dockerfile.
 - Not yet deployed anywhere beyond the local machine.
+
+---
+
+## ✅ Phase 18 — Chunk Splitting for Long Functions (Complete)
+
+- Long functions (previously stored as ONE giant chunk, regardless of length) now get split into multiple smaller, overlapping pieces during indexing, so no single chunk is ever too large for the LLM to see in full.
+- Added `split_long_chunks()` in `index_codebase.py`: any chunk over `CHUNK_SPLIT_THRESHOLD` (2000 chars) gets divided into `SPLIT_PIECE_SIZE` (1500 char) pieces, with `SPLIT_OVERLAP` (300 chars) shared between consecutive pieces so logic isn't severed at a split boundary.
+- Discovered and fixed a critical follow-on bug: continuation pieces (everything after the first piece of a split function) don't contain the function's own name anywhere in their text, making them effectively invisible to both semantic search and BM25 for a query like "what does X do" — only the piece containing the declaration would ever get retrieved.
+- Fixed by prefixing every continuation piece with a `// continuation of: <declaration line>` header, extracted by skipping past any leading comment lines and taking the first 150 characters of genuine code — making every piece of a long function independently searchable by name.
+- Verified with a full re-index (5310 chunks, same count before/after the header change, confirming only the TEXT of continuation pieces changed, not the split logic itself) and a live before/after comparison on `processClaimWebhook`: the answer went from describing roughly half the function (cutting off at the idempotency check) to describing the complete implementation — the stale-event guard, the full transaction, and the rule-engine dispatch, a section never described by any previous answer.
+
+**Files:** `index_codebase.py` (added `split_long_chunks`), `rag_api.py` (temporary diagnostic logging, later trimmed)
+
+### Key learnings
+- Splitting a long chunk into pieces is only half the fix — each piece also needs enough independent context to be *findable*, since a retrieval system can't match something it can't see distinguishing information for.
+- A regex-based name search risks picking up an inner/nested function instead of the outer one; a safer heuristic is to search only within the first several lines of the ORIGINAL (pre-split) chunk, since tree-sitter's own chunk boundaries guarantee the outer declaration sits at the very start.
+- Docker's build cache can occasionally fail to detect a changed file (observed directly: a `down`/`up` cycle ran the OLD code even after editing `rag_api.py`), confirmed via `docker exec ... grep` against the running container's own copy of the file; `docker compose build --no-cache` is the reliable fallback when this is suspected.
+- A chunking-logic change (not a source-file change) requires a full wipe of both `indexing_tracker.db` and `chroma_db_v2`, since the incremental re-indexer only detects changes to the SOURCE file's content hash, not changes to the indexing code itself.
+
+### ⚠️ Known limitations / next steps
+- The header-extraction heuristic assumes a function's leading comment block is under ~10 lines; an unusually long comment block could still cause the wrong text to be used as the header (would fall back gracefully to whatever text follows, including comments, rather than crashing).
