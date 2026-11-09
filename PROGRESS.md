@@ -270,3 +270,31 @@ Before searching ChromaDB, use the LLM to rewrite the user's natural-language qu
 - Counters live in one process's memory. They reset on restart and aren't shared between workers. Behind a reverse proxy, the client IP must come from `X-Forwarded-For`.
 - CORS is still open (`*`) and the frontend still calls a hardcoded local address.
 - Next: Docker and deployment.
+---
+
+## ✅ Phase 17 — Containerization with Docker (Complete)
+
+- Added `HF_HUB_OFFLINE=1` at the very top of `rag_api.py`, set before any model-loading imports, to stop `sentence-transformers`/`huggingface_hub` from making redundant network checks against HuggingFace on every startup, since model weights are already cached/baked in. This also sped up local `--reload` restarts.
+- Wrote `requirements.txt` via `pip freeze`, manually trimming `tree-sitter`/`tree-sitter-javascript` (only needed by `index_codebase.py`, which never runs inside the container).
+- Wrote a `Dockerfile`: starts from `python:3.11-slim`, installs the CPU-only build of `torch` explicitly via PyTorch's own index URL (to avoid accidentally pulling the much larger GPU build), installs the rest of `requirements.txt`, then pre-downloads both model weights (embedding + cross-encoder) during the build itself so they're baked into the image and never need to be fetched at container startup.
+- Decided the container is serve-only: it never indexes, and never has access to the actual source codebase being indexed. Only `rag_api.py` is copied in.
+- Kept three things deliberately OUTSIDE the image, supplied at container-start time instead: `.env` secrets (via `--env-file`/`env_file`), the ChromaDB folder, and the SQLite conversation-history file — both mounted as volumes, so the database and conversation history persist across container restarts rather than living only in the container's own throwaway filesystem.
+- Wrote `docker-compose.yml` to replace a long manual `docker run` command with one reproducible file (`docker compose up` / `docker compose down`).
+- Verified end-to-end: the full pipeline (query rewriting, hybrid search, re-ranking, budget-based trimming, Groq calls) runs correctly inside the container and produces answers identical in quality to local runs; confirmed via a direct SQLite query that conversation history genuinely persists to the host machine's real disk through the volume mount, not just inside the container.
+- Hit and resolved a `docker` group permission issue (worked around with `sudo` for now, proper fix — full logout/login — deferred); hit and fixed a strict-parsing failure in `--env-file` caused by a stray malformed line in `.env` that `python-dotenv` had been silently warning about (and we'd been ignoring) for weeks.
+
+**Files:** `rag_api.py` (added `HF_HUB_OFFLINE`), `requirements.txt`, `Dockerfile`, `docker-compose.yml`
+
+### Key learnings
+- An image is a frozen, built package; a container is one running instance of it — the same image can be used to start many independent containers, and stopping/removing a container never affects the image it came from (though a container must be removed before its image can be).
+- Docker's layer caching means a Dockerfile's instructions are each checked for change individually — editing only `rag_api.py` triggers a near-instant rebuild (one line re-copied), while changing `requirements.txt` forces every step after it to re-run. This is why dependency installation is ordered before application code in the Dockerfile.
+- A container's own filesystem is wiped every time it stops; a mounted volume is the mechanism for making specific data survive by redirecting reads/writes to a real path on the host machine's disk instead.
+- Inside a container, a server must bind to `0.0.0.0`, not `127.0.0.1` — a request from the host machine, even though it's physically the same computer, arrives at the container from "outside" its isolated network, and `127.0.0.1` would reject it as not originating from the container itself.
+- SQLite volumes are inherently per-machine: two different people each running this via Docker Compose get two completely separate, unsynced `rag_memory.db` files — appropriate here, since conversation history is meant to be personal and session-scoped, unlike the shared/reference `chroma_db_v2` data.
+
+### ⚠️ Known limitations / next steps
+- Still requires `sudo` for Docker commands due to an unresolved group-membership issue in the current shell environment.
+- `index.html` still has a hardcoded `127.0.0.1:8003` address — not yet configurable for any deployment beyond "same machine as the browser."
+- The in-memory rate limiter still resets on every container restart and would under-limit across multiple worker processes — needs a shared store (e.g. Redis) before any real multi-worker or always-on deployment.
+- No image has been pushed to a registry (e.g. Docker Hub) yet — currently, running this requires building locally from the Dockerfile.
+- Not yet deployed anywhere beyond the local machine.

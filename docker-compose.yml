@@ -1,0 +1,11 @@
+services:
+  rag-api:
+    build: .
+    ports:
+      - "8003:8003"
+    env_file:
+      - .env
+    volumes:
+      - ./chroma_db_v2:/app/chroma_db_v2
+      - ./rag_memory.db:/app/rag_memory.db
+    restart: unless-stopped

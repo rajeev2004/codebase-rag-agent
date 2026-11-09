@@ -1,3 +1,6 @@
+import os
+os.environ["HF_HUB_OFFLINE"] = "1"
+
 #necessary imports
 import sqlite3
 import datetime
@@ -11,7 +14,6 @@ from pydantic import BaseModel, Field
 import re
 from typing import TypedDict, Annotated, Literal
 from dotenv import load_dotenv
-import os
 import logging
 from sentence_transformers import CrossEncoder
 from rank_bm25 import BM25Okapi
