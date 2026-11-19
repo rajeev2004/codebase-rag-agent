@@ -319,3 +319,25 @@ Before searching ChromaDB, use the LLM to rewrite the user's natural-language qu
 
 ### ⚠️ Known limitations / next steps
 - The header-extraction heuristic assumes a function's leading comment block is under ~10 lines; an unusually long comment block could still cause the wrong text to be used as the header (would fall back gracefully to whatever text follows, including comments, rather than crashing).
+
+---
+
+## ✅ Phase 19 — Frontend Config & Persistent Rate Limiting (Complete)
+
+- `index.html`: replaced the hardcoded `'http://127.0.0.1:8003/ask'` inside the `fetch()` call with a single `API_BASE_URL` constant declared at the top of the script, used via a template literal (`` `${API_BASE_URL}/ask` ``). Changing where the frontend points now means editing one line in one obvious place instead of hunting through the file.
+- Replaced the in-memory rate limiter (`defaultdict(deque)`, reset on every restart) with a SQLite-backed one, reusing the existing `rag_memory.db` connection. Added a `rate_limit_log` table (`client_ip`, `request_time`); `is_rate_limited` now deletes rows older than `RATE_WINDOW` for that IP, counts what remains, blocks if at `RATE_LIMIT`, otherwise inserts the current request's timestamp and allows it.
+- Verified the fix is genuine, not coincidental: burned through the limit (ten 200s, then a 429) on a session id, then immediately ran `docker compose down` + `docker compose up -d` and repeated the same request within the same rate window. It was still blocked with a 429 — proof the state survived a full container restart, which the old in-memory version could never do.
+- Hit the same build-cache miss from Phase 18 again (`down`/`up` ran the old code despite the edit); confirmed via `docker exec ... grep` and resolved with `docker compose build --no-cache` before testing.
+
+**Files:** `rag_api.py` (SQLite-backed `is_rate_limited`, new `rate_limit_log` table, removed `defaultdict`/`deque`), `index.html` (`API_BASE_URL` constant)
+
+### Key learnings
+- A first persistence test that returns the expected result isn't automatically proof of the fix — if enough time has passed since the burst of requests, the rate window may have expired naturally regardless of whether state survived a restart. The real test needs the restart and the follow-up request to both happen within the original window.
+- Editing a file that lives under a `volumes:` mount (`chroma_db_v2`, `rag_memory.db`) never requires a rebuild — the container reads the same real file on the host disk either way. Editing a file that gets `COPY`'d into the image (`rag_api.py`) always does, since the container's copy is frozen at whatever the file looked like at build time.
+- `--no-cache` only forces the image build to redo every instruction from scratch; it has no effect on mounted volumes, since those are attached at `docker compose up` time, entirely separate from the build process.
+
+### ⚠️ Known limitations / next steps
+- Still single-worker: this fix solves the restart problem but not the multi-worker problem, since separate `uvicorn` workers would each open their own SQLite connection. Not an issue at the current single-worker scale; would need Redis (or similar) if ever scaled to multiple workers.
+- The `docker` group permission issue from Phase 17 is still unresolved — every Docker command still needs `sudo`.
+- `CORS` is still open (`allow_origins=["*"]`).
+- No image pushed to a registry yet; not deployed beyond the local machine.

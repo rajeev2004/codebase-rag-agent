@@ -57,16 +57,6 @@ RATE_LIMIT = 10         # requests allowed
 RATE_WINDOW = 60        # per this many seconds
 request_log = defaultdict(deque)
 
-def is_rate_limited(key):
-    now = time.time()
-    log = request_log[key]
-    while log and now - log[0] > RATE_WINDOW:
-        log.popleft()                  # drop timestamps outside the window
-    if len(log) >= RATE_LIMIT:
-        return True
-    log.append(now)
-    return False
-
 #tokemize the words for keyword searching
 def tokenize(text):
     raw_words = re.findall(r'\w+', text)
@@ -106,6 +96,11 @@ cursor.execute("""CREATE TABLE IF NOT EXISTS conversation_history (
                     question TEXT,
                     answer TEXT,
                     timestamp TEXT)"""
+                )
+
+cursor.execute("""CREATE TABLE IF NOT EXISTS rate_limit_log (
+                    client_ip TEXT,
+                    request_time REAL)"""
                 )
 conn.commit()
 #Request modal
@@ -266,6 +261,20 @@ def generate_answer(state: CodeRetrievalAgent):
     if "find relevant code" in cleaner_response.lower():
         logger.warning("LLM could not find relevant code from the retrieved chunks")
     return {"result": cleaner_response, "sources": state["sources"]}
+
+def is_rate_limited(key):
+    now = time.time()
+    cutoff = now - RATE_WINDOW
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM rate_limit_log WHERE client_ip=? AND request_time < ?", (key, cutoff))
+    conn.commit()
+    cursor.execute("SELECT COUNT(*) FROM rate_limit_log WHERE client_ip=?", (key,))
+    count = cursor.fetchone()[0]  #fetchone() returns a tuple, that's why we need [0].
+    if(count >= RATE_LIMIT):
+        return True
+    cursor.execute("INSERT INTO rate_limit_log VALUES (?, ?)", (key, now))
+    conn.commit()
+    return False
 
 #building the graph
 graph = StateGraph(CodeRetrievalAgent)
