@@ -18,7 +18,6 @@ import logging
 from sentence_transformers import CrossEncoder
 from rank_bm25 import BM25Okapi
 import time
-from collections import defaultdict, deque
 
 #Adding re-ranker
 reranker = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
@@ -55,7 +54,6 @@ PER_CHUNK_CAP = 3000    # Budget for every re-ranked chunk
 TOTAL_BUDGET = 10000    # Total budget for the 5 re-ranked chunks
 RATE_LIMIT = 10         # requests allowed
 RATE_WINDOW = 60        # per this many seconds
-request_log = defaultdict(deque)
 
 #tokemize the words for keyword searching
 def tokenize(text):
@@ -255,7 +253,7 @@ def generate_answer(state: CodeRetrievalAgent):
     try:
         response = llm.invoke(prompt)
     except Exception as e:
-        logger.error(f"LLM did not produced the result")
+        logger.error(f"LLM did not produced the result, {e}")
         return {"result":"I am having trouble generating the response right now.", "sources":[]}
     cleaner_response = re.sub(r'<think>.*?</think>', '', response.content, flags=re.DOTALL).strip()
     if "find relevant code" in cleaner_response.lower():

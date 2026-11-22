@@ -341,3 +341,38 @@ Before searching ChromaDB, use the LLM to rewrite the user's natural-language qu
 - The `docker` group permission issue from Phase 17 is still unresolved — every Docker command still needs `sudo`.
 - `CORS` is still open (`allow_origins=["*"]`).
 - No image pushed to a registry yet; not deployed beyond the local machine.
+
+---
+
+## ✅ Phase 20 — Evaluation Harness & Frontend Redesign (Complete)
+
+### Part A — extended the existing retrieval eval (`eval_retrieval.py`)
+- Re-ran the October retrieval eval (unchanged script) against the current system, after all the chunk-splitting and budget-trimming work. `hybrid_reranked` now scores Hit@5=1.00, MRR=0.81 across all 22 answerable questions — up from the October baseline, with `semantic`-only still the weakest path on exact-identifier and two-file questions, exactly as expected.
+
+### Part B — new answer-completeness eval (`eval_completeness.json`, `eval_completeness_collect.py`, `eval_completeness_score.py`)
+- Retrieval hit-rate alone can't catch the kind of bug Phase 18 fixed: a file can be correctly retrieved while the final answer still omits a continuation piece's content. Built a second eval that checks the actual rendered `/ask` answer text for specific literal tokens (`must_mention`), not just whether the right file showed up.
+- Wrote 47 new questions (own domain knowledge, covering routes, logic, migrations, and several "dead code" / "trick" questions) with per-question `must_mention` lists — reviewed each term and dropped or replaced natural-language paraphrases (e.g. `"round-robin"`, `"least recently assigned"`) in favor of literal identifiers, constants, and exact strings, since an LLM paraphrases freely and a phrase-based check would fail on genuinely correct answers.
+- `eval_completeness_collect.py` hits the live `/ask` endpoint per question (a fresh `session_id` each time, so questions don't contaminate each other's conversation history) and saves raw answers; `eval_completeness_score.py` does a strict pass/fail per question (all `must_mention` terms present, substring + case-insensitive) and reports per-question hit counts plus a headline pass rate.
+- First full run: 25/47 (53%) fully passed. Investigating the failures surfaced two distinct root causes, neither a RAG quality bug:
+  - Several `0/N` (complete-miss) results were Groq **429s** — confirmed directly from `docker logs` after adding the actual exception text to the `generate_answer` except block (previously logged only `"LLM did not produced the result"` with no detail, same class of silent-error bug fixed before in Phase 13).
+  - The first 429s looked like a per-minute burst limit; a second, slower-paced re-run instead surfaced Groq's **daily token quota** (`tokens per day (TPD): Limit 200000`) — a ceiling completely separate from the app's own per-IP rate limiter, and one that a single 47-question run (2 LLM calls each) can exhaust on the free tier.
+  - Re-tested `processClaimWebhook` in isolation once Groq had capacity again: produced a complete, accurate answer correctly mentioning all three `must_mention` terms, confirming the original `0/3` was an infrastructure artifact, not a regression in chunk-splitting or retrieval.
+- Decided not to force a clean single-sitting re-run of all 47 on the free tier; evaluation is continuing across multiple sessions instead, to stay under the daily quota.
+
+### Part C — frontend redesign (`index.html`)
+- Replaced the plain dark-UI styling with a deliberately designed look (see `/mnt/skills/public/frontend-design` process: concept, palette, type, layout, then a review pass against known generic-AI-UI tells before writing code), while leaving every functional line untouched: `API_BASE_URL`, `session_id` generation, the `/ask` POST body, reading `response.json()` before checking `response.ok`, 422/400/429 handling, `marked.parse()`, and the button disable/`finally` pattern are all byte-for-byte the same logic as before.
+- Concept: a "casefile" framing grounded in what the system actually does (retrieve evidence, cite sources) — the LLM's answer renders under a "Finding" heading, sources render as a numbered "Exhibits" list, both using a serif display face reserved for section labels, with a monospace face for everything functional (input, answer prose, code). Code blocks in the answer get an inset paper-toned background to visually separate "quoted from the source" from the model's own prose around it.
+- Added a `PROJECT_NAME` constant (so the wordmark can be swapped for a different codebase this tool is pointed at later) and a time-of-day greeting function that replaces the static tagline with one of two rotating lines per 7 time-of-day buckets.
+
+**Files:** `index.html` (full visual redesign + `PROJECT_NAME`/greeting), `rag_api.py` (added the actual exception text to the `generate_answer` log line), `eval_completeness.json` (new, gitignored — company-specific questions), `eval_completeness_collect.py` (new), `eval_completeness_score.py` (new)
+
+### Key learnings
+- A `must_mention` check needs to test for things an LLM can't easily paraphrase around — exact identifiers, constants, literal strings, specific numbers — not descriptions of what the code does in the question-writer's own words, or the check just measures word choice instead of completeness.
+- A strict pass/fail (every required term present) is more honest than an averaged partial-credit score; a near-miss is still a real gap, and softening the bar to "mostly right" would hide exactly the kind of incomplete-answer bug this eval exists to catch.
+- A low eval score isn't automatically a quality regression — it can be an infrastructure artifact (an API provider's own rate or quota limit), and the fix for the eval's own "is this the right explanation" question was the same discipline used throughout this project: get the actual underlying error text before concluding anything, rather than accepting a generic failure message at face value.
+- Two genuinely different caps exist on Groq's free tier — a short per-minute burst limit and a separate, much more constraining daily token quota — and a batch eval's pacing needs to account for both, not just the one the app's own rate limiter was modeled after.
+
+### ⚠️ Known limitations / next steps
+- `eval_completeness.json` has 6 questions with only a single `must_mention` term — a weak test on its own; flagged for strengthening with a second literal token per question when picking this back up.
+- The full 47-question completeness eval hasn't completed a clean, quota-unaffected run yet; the 53% first-pass number should not be quoted without the context that several failures are confirmed Groq capacity artifacts, not RAG bugs.
+- Docker group permission issue (Phase 17) and open CORS (`allow_origins=["*"]`) are both still unresolved.

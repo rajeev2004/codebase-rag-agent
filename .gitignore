@@ -7,3 +7,7 @@ chroma_db_v2/
 *.db-shm
 *.db-wal
 .env
+eval_completeness_collect.py
+eval_completeness_score.py
+eval_completeness.json
+testing.py
